@@ -54,7 +54,7 @@ ENV=$(~/.claude/scripts/playwright-setup.sh)
 ~/.claude/scripts/playwright-capture.sh <TARGET_URL> "$ENV"
 ```
 
-`playwright-setup.sh` auto-detects Playwright on host or ddev, installs it if missing, configures the MCP server for future sessions, and outputs `host` or `ddev`.
+`playwright-setup.sh` prefers the **host** (WSL/native) over ddev, because ddev containers often ship with an outdated Node.js that cannot run `@playwright/mcp`. It checks that Node >= 18 before accepting an environment. Falls back to ddev only when the host has no suitable Node + Playwright.
 
 `playwright-capture.sh` runs headless Chromium, scrolls the page, and outputs all network request URLs to stdout.
 
