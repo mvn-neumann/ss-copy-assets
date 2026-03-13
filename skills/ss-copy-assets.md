@@ -12,9 +12,9 @@ Downloads images and videos from a live SilverStripe website to local `assets/` 
 
 ### 1. Detect SilverStripe Version
 
-Read `composer.json`: look for `"silverstripe/framework"`.
+Read `composer.json`: look for `"silverstripe/framework"` or `"silverstripe/recipe-cms"`.
 - `~3.` or `3.x-dev` → SS version **3**
-- `^4` or `^5` → SS version **4**
+- `^4`, `^5`, or any `silverstripe/recipe-cms` entry → SS version **4**
 
 ### 2. Ensure ddev is running
 

@@ -9,6 +9,7 @@
 set -euo pipefail
 
 SETTINGS_FILE="$HOME/.claude/settings.json"
+LOCAL_LIB="$HOME/.claude/lib"
 MIN_NODE_MAJOR=18
 
 log() { echo "[playwright-setup] $*" >&2; }
@@ -20,11 +21,28 @@ node_major() {
   echo "${v#v}" | cut -d. -f1
 }
 
+# Resolve the node_modules directory containing playwright.
+# Checks: 1) local lib  2) global npm root
+resolve_playwright_node_path() {
+  if [[ -d "$LOCAL_LIB/node_modules/playwright" ]]; then
+    echo "$LOCAL_LIB/node_modules"
+    return
+  fi
+  local g
+  g="$(npm root -g 2>/dev/null)" || true
+  if [[ -n "$g" && -d "$g/playwright" ]]; then
+    echo "$g"
+    return
+  fi
+  return 1
+}
+
 # --- 1. Check host ---
 check_host() {
   local maj
   maj=$(node_major node)
-  (( maj >= MIN_NODE_MAJOR )) && npx playwright --version >/dev/null 2>&1
+  (( maj >= MIN_NODE_MAJOR )) || return 1
+  resolve_playwright_node_path >/dev/null 2>&1
 }
 
 # --- 2. Check ddev ---
@@ -35,14 +53,33 @@ check_ddev() {
   (( maj >= MIN_NODE_MAJOR )) && ddev exec npx playwright --version >/dev/null 2>&1
 }
 
-# --- 3. Ensure Chromium is installed in a given environment ---
+# --- 3. Ensure Chromium is installed and can launch ---
 ensure_chromium() {
   local env="$1"
   if [[ "$env" == "host" ]]; then
     local pw_cache="$HOME/.cache/ms-playwright"
+    local np
+    np=$(resolve_playwright_node_path)
     if ! ls "$pw_cache"/chromium-* >/dev/null 2>&1; then
       log "Installing Chromium browser on host..."
-      npx playwright install chromium >&2
+      NODE_PATH="$np" npx playwright install chromium >&2
+    fi
+    # Verify Chromium can actually launch (system deps may be missing)
+    if ! NODE_PATH="$np" node -e "
+      const { chromium } = require('playwright');
+      chromium.launch({ headless: true }).then(b => { b.close(); process.exit(0); }).catch(() => process.exit(1));
+    " 2>/dev/null; then
+      log "Chromium cannot launch on host (missing system libraries)."
+      log "Attempting: npx playwright install-deps chromium"
+      NODE_PATH="$np" npx playwright install-deps chromium >&2 2>/dev/null || true
+      # Re-check after install-deps
+      if ! NODE_PATH="$np" node -e "
+        const { chromium } = require('playwright');
+        chromium.launch({ headless: true }).then(b => { b.close(); process.exit(0); }).catch(() => process.exit(1));
+      " 2>/dev/null; then
+        log "WARN: Host Chromium still broken. Falling back to ddev."
+        return 1
+      fi
     fi
   elif [[ "$env" == "ddev" ]]; then
     if ! ddev exec bash -c 'ls /root/.cache/ms-playwright/chromium-* 2>/dev/null' >/dev/null 2>&1; then
@@ -54,9 +91,18 @@ ensure_chromium() {
 
 # --- 4. Install Playwright on host if nowhere available ---
 install_host() {
-  log "Playwright not found. Installing globally on host..."
-  npm install -g playwright@^1 >&2
-  npx playwright install chromium >&2
+  # Try global install first, fall back to local ~/.claude/lib/
+  if npm install -g playwright@^1 >&2 2>/dev/null; then
+    log "Installed Playwright globally"
+  else
+    log "Global install failed (permissions). Installing to $LOCAL_LIB ..."
+    mkdir -p "$LOCAL_LIB"
+    (cd "$LOCAL_LIB" && npm init -y --silent >/dev/null 2>&1 && npm install playwright@^1 >&2)
+    log "Installed Playwright to $LOCAL_LIB"
+  fi
+  local np
+  np=$(resolve_playwright_node_path) || { log "ERROR: Playwright install failed"; return 1; }
+  NODE_PATH="$np" npx playwright install chromium >&2
 }
 
 # --- 5. Ensure MCP server config in settings.json ---
@@ -110,6 +156,12 @@ else
     fi
   fi
 
+  # Final fallback: try ddev
+  if [[ -z "$ENV" ]] && check_ddev; then
+    ENV="ddev"
+    log "Falling back to ddev (Node $(ddev exec node --version 2>/dev/null))"
+  fi
+
   if [[ -z "$ENV" ]]; then
     log "ERROR: No environment with Node >= $MIN_NODE_MAJOR and Playwright available"
     log "Install Node >= $MIN_NODE_MAJOR on the host or in ddev, then retry."
@@ -117,7 +169,22 @@ else
   fi
 fi
 
-ensure_chromium "$ENV"
+# Ensure Chromium works; fall back to ddev if host Chromium is broken
+if [[ "$ENV" == "host" ]]; then
+  if ! ensure_chromium "host"; then
+    if check_ddev; then
+      ENV="ddev"
+      ensure_chromium "ddev"
+    else
+      log "ERROR: Chromium cannot launch on host and ddev is not available."
+      log "Install system dependencies: sudo npx playwright install-deps chromium"
+      exit 1
+    fi
+  fi
+else
+  ensure_chromium "$ENV"
+fi
+
 ensure_mcp_config
 
 echo "$ENV"

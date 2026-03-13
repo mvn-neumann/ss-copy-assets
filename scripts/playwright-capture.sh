@@ -55,7 +55,14 @@ const { chromium } = require('playwright');
 SCRIPT
 
 if [[ "$ENV" == "host" ]]; then
-  NODE_PATH="$(npm root -g)" node "$CAPTURE_SCRIPT" "$URL" 2>/dev/null
+  # Resolve playwright from local lib first, then global
+  LOCAL_LIB="$HOME/.claude/lib"
+  if [[ -d "$LOCAL_LIB/node_modules/playwright" ]]; then
+    NODE_PATH="$LOCAL_LIB/node_modules"
+  else
+    NODE_PATH="$(npm root -g)"
+  fi
+  NODE_PATH="$NODE_PATH" node "$CAPTURE_SCRIPT" "$URL" 2>/dev/null
 elif [[ "$ENV" == "ddev" ]]; then
   # Copy script into ddev container and run there
   ddev exec bash -c "cat > /tmp/_capture-urls.cjs" < "$CAPTURE_SCRIPT"
