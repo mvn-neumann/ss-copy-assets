@@ -25,7 +25,10 @@ fi
 BASE_URL="${BASE_URL%/}"
 
 # Read URLs from stdin, filter for /assets/ images+videos, strip query strings, deduplicate
+# Input lines may contain surrounding text (e.g. Playwright MCP format:
+# "1. [GET] https://example.com/assets/x.jpg => [200]"), so extract URL tokens first.
 mapfile -t URLS < <(
+  grep -oE '(https?://|/)[^[:space:]"'"'"']+' |
   grep -iE '/assets/.*\.(png|jpe?g|webp|svg|gif|mp4|webm|mov|avi|ogv)(\?|$)' |
   sed 's/\?.*//' |
   sort -uf
