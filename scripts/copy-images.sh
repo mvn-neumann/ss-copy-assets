@@ -24,6 +24,13 @@ fi
 # Strip trailing slash from base URL
 BASE_URL="${BASE_URL%/}"
 
+# Determine local assets root: SS4+ projects with a public webroot serve
+# assets from public/assets, SS3 (and SS4 without public dir) from assets/
+ASSETS_PREFIX=""
+if [[ "$SS_VERSION" == "4" && -d "public" ]]; then
+  ASSETS_PREFIX="public/"
+fi
+
 # Read URLs from stdin, filter for /assets/ images+videos, strip query strings, deduplicate
 # Input lines may contain surrounding text (e.g. Playwright MCP format:
 # "1. [GET] https://example.com/assets/x.jpg => [200]"), so extract URL tokens first.
@@ -110,6 +117,8 @@ for entry in "${ALL_URLS[@]}"; do
     continue
   fi
 
+  rel_path="${ASSETS_PREFIX}${rel_path}"
+
   # Skip if file already exists and is non-empty
   if [[ -s "$rel_path" ]]; then
     skip=$((skip + 1))
@@ -132,6 +141,7 @@ done
 
 # Summary
 echo "--- Copy Assets Summary ---"
+echo "Target: $(pwd)/${ASSETS_PREFIX}assets/"
 echo "Downloaded: $ok  |  Skipped (existing): $skip  |  Failed/404: $fail"
 if [[ "$ok" -gt 0 ]]; then
   echo -n "By type:"
