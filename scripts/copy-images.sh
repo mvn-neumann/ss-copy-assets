@@ -54,29 +54,46 @@ derive_original() {
       echo "$url" | sed -E 's|/_resampled/[^/]+/|/|'
     fi
   else
+    local LC_ALL=C
     # Manipulated names look like <stem>__<Operation><base64args>.<ext>. Further
     # operations are chained with a single underscore, e.g.
     # "__ScaleMaxWidth…_ExtRewrite…", so everything from the first operation on
     # belongs to the variant name, not to the original.
     local path="${url%%\?*}"
+    local dir="${path%/*}"
     local base="${path##*/}"
-    [[ "$base" =~ __[A-Z][A-Za-z]+[A-Z] ]] || return 0
+    [[ "$base" == *__* ]] || return 0
 
     local stem="${base%%__*}"
-    local dir="${path%/*}"
     local ext="${path##*.}"
+    local variant="${base#*__}"
+    variant="${variant%.*}"
+
+    # Only treat the rest as a variant when it looks like one: uppercase-leading
+    # manipulation names without dots, so a filename like "notes__draft.png" is
+    # left alone.
+    [[ "$variant" =~ ^[A-Z][A-Za-z0-9~_=-]*$ ]] || return 0
 
     # The ExtRewrite payload encodes [source extension, target extension]; the
     # original is named with the source extension (e.g. .png for a .webp variant).
-    if [[ "$path" =~ _ExtRewrite([A-Za-z0-9_=-]+)\. ]]; then
-      local payload="${BASH_REMATCH[1]}"
+    # SilverStripe splits chained operations on "_" and takes the rightmost
+    # ExtRewrite, so do the same.
+    local -a parts
+    IFS='_' read -r -a parts <<< "$variant"
+    local i part payload decoded src
+    for (( i=${#parts[@]}-1; i>=0; i-- )); do
+      part="${parts[$i]}"
+      [[ "$part" == ExtRewrite?* ]] || continue
+      payload="${part#ExtRewrite}"
       while (( ${#payload} % 4 )); do payload+="="; done
-      local decoded
-      decoded=$(printf '%s' "$payload" | tr '_-' '+/' | base64 -d 2>/dev/null || true)
+      # SilverStripe's base64url alphabet is "+/" -> "~_" (not the RFC 4648 "-_")
+      decoded=$(printf '%s' "$payload" | tr '~_' '+/' | base64 -d 2>/dev/null || true)
       if [[ "$decoded" =~ ^\[\"([A-Za-z0-9]+)\" ]]; then
-        ext="${BASH_REMATCH[1]}"
+        src="${BASH_REMATCH[1]}"
+        ext="$src"
+        break
       fi
-    fi
+    done
 
     echo "${dir}/${stem}.${ext}"
   fi
@@ -84,6 +101,7 @@ derive_original() {
 
 # Collect all URLs to download (network + derived originals), deduplicated
 declare -A SEEN
+declare -A ORIGINALS   # origin URL -> first variant URL that needs it
 ALL_URLS=()
 
 for url in "${URLS[@]}"; do
@@ -111,6 +129,9 @@ for url in "${URLS[@]}"; do
 
   # Derive original
   orig=$(derive_original "$full_url")
+  if [[ -n "$orig" && -z "${ORIGINALS[$orig]:-}" ]]; then
+    ORIGINALS[$orig]="$full_url"
+  fi
   if [[ -n "$orig" && -z "${SEEN[$orig]:-}" ]]; then
     SEEN[$orig]=1
     # For imgix originals, derive the imgix download URL too
@@ -161,18 +182,15 @@ for entry in "${ALL_URLS[@]}"; do
   fi
 done
 
-# Variants whose original file is still missing: SilverStripe does not render them
+# Variants whose original file is still missing: SilverStripe does not render them.
+# Reported once per original, not once per variant that needs it.
 warn=0
-for entry in "${ALL_URLS[@]}"; do
-  url="${entry%%|*}"
-  orig=$(derive_original "$url")
-  if [[ -n "$orig" ]]; then
-    rel_orig="${orig#"$BASE_URL"}"
-    rel_orig="${ASSETS_PREFIX}${rel_orig#/}"
-    if [[ ! -s "$rel_orig" ]]; then
-      echo "WARN: original missing for ${url#"$BASE_URL"} (tried ${orig#"$BASE_URL"})" >&2
-      warn=$((warn + 1))
-    fi
+for orig in "${!ORIGINALS[@]}"; do
+  rel_orig="${orig#"$BASE_URL"}"
+  rel_orig="${ASSETS_PREFIX}${rel_orig#/}"
+  if [[ ! -s "$rel_orig" ]]; then
+    echo "WARN: original missing for ${ORIGINALS[$orig]#"$BASE_URL"} (tried ${orig#"$BASE_URL"})" >&2
+    warn=$((warn + 1))
   fi
 done
 
@@ -181,7 +199,7 @@ echo "--- Copy Assets Summary ---"
 echo "Target: $(pwd)/${ASSETS_PREFIX}assets/"
 echo "Downloaded: $ok  |  Skipped (existing): $skip  |  Failed/404: $fail"
 if [[ "$warn" -gt 0 ]]; then
-  echo "Warnings: $warn (variants without an original)"
+  echo "Warnings: $warn (originals missing)"
 fi
 if [[ "$ok" -gt 0 ]]; then
   echo -n "By type:"
