@@ -69,6 +69,13 @@ echo "<NETWORK_REQUEST_URLS>" | ~/.claude/scripts/copy-images.sh <base_url> <ss_
 - `<base_url>`: the site origin, e.g. `https://www.example.com`
 - `<ss_version>`: `3` or `4` (from step 1)
 
+The script also downloads the original behind every manipulated URL, including chained variants
+such as `X__ScaleMaxWidth…_ExtRewrite….webp` (the source extension comes from the `ExtRewrite`
+payload, e.g. `.png`). SilverStripe does not render an image whose original file is absent, even
+when the variant was copied. A `WARN: original missing for …` line means the file is neither
+local nor reachable on the live site — supply it manually before re-rendering the page with
+`?flush=1`.
+
 ### Critical Rules
 
 1. **ALWAYS detect SS version** from `composer.json` before running the script

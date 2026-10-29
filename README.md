@@ -61,6 +61,13 @@ Claude will:
 2. **`playwright-capture.sh`** — Runs headless Chromium, scrolls the target page, outputs all network request URLs
 3. **`copy-images.sh`** — Filters URLs for `/assets/` images/videos, derives original (non-resampled) URLs, downloads via curl
 
+Original files matter: SilverStripe only renders a manipulated image (`__FillMax…`,
+`__ScaleMaxWidth…_ExtRewrite…`) when its source file exists, even if the variant itself was
+copied. The script therefore also derives the original for chained variants — reading the source
+extension from the `ExtRewrite` payload, so `X__…_ExtRewrite<["png","webp"]>.webp` resolves to
+`X.png` — and prints `WARN: original missing for …` for every variant whose original is still
+absent.
+
 ## What Gets Installed
 
 ```

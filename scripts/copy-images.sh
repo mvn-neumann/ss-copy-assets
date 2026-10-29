@@ -54,9 +54,31 @@ derive_original() {
       echo "$url" | sed -E 's|/_resampled/[^/]+/|/|'
     fi
   else
-    if echo "$url" | grep -qE '__[A-Z][A-Za-z]+[A-Z][A-Za-z0-9=]+\.[a-zA-Z]+$'; then
-      echo "$url" | sed -E 's/__[A-Z][A-Za-z]+[A-Z][A-Za-z0-9=]+(\.[a-zA-Z]+)$/\1/'
+    # Manipulated names look like <stem>__<Operation><base64args>.<ext>. Further
+    # operations are chained with a single underscore, e.g.
+    # "__ScaleMaxWidth…_ExtRewrite…", so everything from the first operation on
+    # belongs to the variant name, not to the original.
+    local path="${url%%\?*}"
+    local base="${path##*/}"
+    [[ "$base" =~ __[A-Z][A-Za-z]+[A-Z] ]] || return 0
+
+    local stem="${base%%__*}"
+    local dir="${path%/*}"
+    local ext="${path##*.}"
+
+    # The ExtRewrite payload encodes [source extension, target extension]; the
+    # original is named with the source extension (e.g. .png for a .webp variant).
+    if [[ "$path" =~ _ExtRewrite([A-Za-z0-9_=-]+)\. ]]; then
+      local payload="${BASH_REMATCH[1]}"
+      while (( ${#payload} % 4 )); do payload+="="; done
+      local decoded
+      decoded=$(printf '%s' "$payload" | tr '_-' '+/' | base64 -d 2>/dev/null || true)
+      if [[ "$decoded" =~ ^\[\"([A-Za-z0-9]+)\" ]]; then
+        ext="${BASH_REMATCH[1]}"
+      fi
     fi
+
+    echo "${dir}/${stem}.${ext}"
   fi
 }
 
@@ -139,10 +161,28 @@ for entry in "${ALL_URLS[@]}"; do
   fi
 done
 
+# Variants whose original file is still missing: SilverStripe does not render them
+warn=0
+for entry in "${ALL_URLS[@]}"; do
+  url="${entry%%|*}"
+  orig=$(derive_original "$url")
+  if [[ -n "$orig" ]]; then
+    rel_orig="${orig#"$BASE_URL"}"
+    rel_orig="${ASSETS_PREFIX}${rel_orig#/}"
+    if [[ ! -s "$rel_orig" ]]; then
+      echo "WARN: original missing for ${url#"$BASE_URL"} (tried ${orig#"$BASE_URL"})" >&2
+      warn=$((warn + 1))
+    fi
+  fi
+done
+
 # Summary
 echo "--- Copy Assets Summary ---"
 echo "Target: $(pwd)/${ASSETS_PREFIX}assets/"
 echo "Downloaded: $ok  |  Skipped (existing): $skip  |  Failed/404: $fail"
+if [[ "$warn" -gt 0 ]]; then
+  echo "Warnings: $warn (variants without an original)"
+fi
 if [[ "$ok" -gt 0 ]]; then
   echo -n "By type:"
   for ext in "${!EXT_COUNT[@]}"; do
